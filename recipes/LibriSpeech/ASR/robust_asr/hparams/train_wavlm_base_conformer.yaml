@@ -1,0 +1,368 @@
+# ############################################################################
+# 方案B: WavLM-base + Conformer + 课程对抗 + 特征级对抗
+# Model: WavLM-base + Conformer Encoder + Transformer Decoder
+# Losses: CTC + CrossEntropy (label smoothing)
+#
+# 创新点:
+# 1. 课程对抗训练: 高 SNR(20dB) → 中 SNR(10dB) → 低 SNR(0dB) 渐进学习
+# 2. 特征级对抗: 对 WavLM 中间层特征加 FGSM 扰动
+#
+# Authors: TODO
+# ############################################################################
+
+# Seed needs to be set at top of yaml, before objects with parameters are made
+seed: 2602
+__set_seed: !apply:speechbrain.utils.seed_everything [!ref <seed>]
+output_folder: !ref results/wavlm_base_conformer_robust/<seed>
+output_wer_folder: !ref <output_folder>/
+save_folder: !ref <output_folder>/save
+train_log: !ref <output_folder>/train_log.txt
+
+# WavLM model
+wavlm_hub: microsoft/wavlm-base
+wavlm_folder: !ref <save_folder>/wavlm_checkpoint
+
+# Language model (LM) pretraining
+pretrained_lm_tokenizer_path: speechbrain/asr-transformer-transformerlm-librispeech
+
+# Data files
+data_folder: !PLACEHOLDER  # e.g., /path/to/LibriSpeech
+train_splits: ["train-clean-100"]
+dev_splits: ["dev-clean"]
+test_splits: ["test-clean", "test-other"]
+skip_prep: False
+ckpt_interval_minutes: 15
+train_csv: !ref <output_folder>/train.csv
+valid_csv: !ref <output_folder>/dev-clean.csv
+test_csv:
+    - !ref <output_folder>/test-clean.csv
+    - !ref <output_folder>/test-other.csv
+
+####################### Training Parameters ####################################
+
+number_of_epochs: 50
+number_of_ctc_epochs: 15
+batch_size: 8
+lr: 0.001
+lr_wav2vec: 0.0001
+ctc_weight: 0.3
+grad_accumulation_factor: 1
+max_grad_norm: 5.0
+loss_reduction: 'batchmean'
+sorting: random
+num_workers: 4
+precision: fp32  # bf16, fp16 or fp32
+
+# 课程对抗训练参数
+curriculum_adversarial: True
+curriculum_epochs: [10, 20]  # 阶段切换的 epoch
+curriculum_snrs: [20, 10, 0]  # dB, 高→中→低 SNR
+adversarial_weight: 0.1  # 对抗 loss 权重
+
+# 特征级对抗参数
+feature_adversarial: True
+adversarial_epsilon: 0.01  # FGSM 扰动大小
+adversarial_layer: 12  # 对哪一层特征加扰动 (WavLM-base 有 12 层)
+
+# Feature parameters
+sample_rate: 16000
+
+# dynamic batching
+dynamic_batching: True
+max_batch_length_train: 800
+max_batch_length_val: 100
+num_bucket: 200
+shuffle: True
+batch_ordering: random
+max_batch_ex: 128
+
+dynamic_batch_sampler_train:
+    max_batch_length: !ref <max_batch_length_train>
+    num_buckets: !ref <num_bucket>
+    shuffle: !ref <shuffle>
+    batch_ordering: !ref <batch_ordering>
+    max_batch_ex: !ref <max_batch_ex>
+
+dynamic_batch_sampler_valid:
+    max_batch_length: !ref <max_batch_length_val>
+    num_buckets: !ref <num_bucket>
+    shuffle: False
+    batch_ordering: random
+    max_batch_ex: !ref <max_batch_ex>
+
+# Dataloader options
+train_dataloader_opts:
+    batch_size: !ref <batch_size>
+    shuffle: True
+    num_workers: !ref <num_workers>
+
+valid_dataloader_opts:
+    batch_size: 1
+
+test_dataloader_opts:
+    batch_size: 1
+
+####################### Model Parameters #######################################
+
+# WavLM parameters
+freeze_wav2vec: True
+wav2vec_output_dim: 768  # WavLM-base 输出维度
+
+# Conformer parameters (参考 conformer_small.yaml)
+d_model: 256
+nhead: 4
+num_encoder_layers: 12
+num_decoder_layers: 4
+d_ffn: 1024
+transformer_dropout: 0.1
+activation: !name:torch.nn.GELU
+
+# Downsampling
+downsampling_factor: 4  # WavLM 25ms hop → 100ms (4x downsample)
+downsampling_kernel_size: 81
+
+# Token parameters
+output_neurons: 5000  # BPE tokenizer size
+blank_index: 0
+label_smoothing: 0.1
+pad_index: 0
+bos_index: 1
+eos_index: 2
+
+# Decoding parameters
+min_decode_ratio: 0.0
+max_decode_ratio: 1.0
+valid_search_interval: 10
+valid_beam_size: 10
+test_beam_size: 50
+lm_weight: 0.60
+ctc_weight_decode: 0.40
+
+############################## Models ##########################################
+
+# WavLM
+wav2vec2: !new:speechbrain.integrations.huggingface.wavlm.WavLM
+    source: !ref <wavlm_hub>
+    output_norm: True
+    freeze_feature_extractor: True
+    freeze: !ref <freeze_wav2vec>
+    save_path: !ref <wavlm_folder>
+
+# Downsampling
+downsampler: !new:speechbrain.lobes.downsampling.Conv1DDownsampler
+    downsampling_factor: !ref <downsampling_factor>
+    kernel_size: !ref <downsampling_kernel_size>
+
+# Conformer Encoder
+CNN: !new:speechbrain.lobes.models.convolution.ConvolutionFrontEnd
+    input_shape: [null, null, 768]
+    num_blocks: 2
+    num_layers_per_block: 1
+    out_channels: (128, 256)
+    kernel_sizes: (3, 3)
+    strides: (2, 2)
+    residuals: (False, False)
+
+Transformer: !new:speechbrain.lobes.models.transformer.TransformerASR.TransformerASR
+    input_size: 512  # CNN output
+    tgt_vocab: !ref <output_neurons>
+    d_model: !ref <d_model>
+    nhead: !ref <nhead>
+    num_encoder_layers: !ref <num_encoder_layers>
+    num_decoder_layers: !ref <num_decoder_layers>
+    d_ffn: !ref <d_ffn>
+    dropout: !ref <transformer_dropout>
+    activation: !ref <activation>
+    encoder_module: conformer
+    attention_type: RelPosMHAXL
+    normalize_before: True
+    causal: False
+
+# Decoder embedding
+emb: !new:speechbrain.nnet.embedding.Embedding
+    num_embeddings: !ref <output_neurons>
+    embedding_dim: !ref <d_model>
+
+# Decoder (GRU)
+dec: !new:speechbrain.nnet.RNN.AttentionalRNNDecoder
+    enc_dim: !ref <d_model>
+    input_size: !ref <d_model>
+    rnn_type: gru
+    attn_type: location
+    hidden_size: 1024
+    attn_dim: 1024
+    num_layers: 1
+    scaling: 1.0
+    channels: 10
+    kernel_size: 100
+    re_init: True
+    dropout: !ref <transformer_dropout>
+
+# Output layers
+ctc_lin: !new:speechbrain.nnet.linear.Linear
+    input_size: !ref <d_model>
+    n_neurons: !ref <output_neurons>
+
+seq_lin: !new:speechbrain.nnet.linear.Linear
+    input_size: 1024
+    n_neurons: !ref <output_neurons>
+
+# Language model (for decoding)
+lm_model: !new:speechbrain.lobes.models.transformer.TransformerLM.TransformerLM
+    vocab: !ref <output_neurons>
+    d_model: 768
+    nhead: 12
+    num_encoder_layers: 12
+    num_decoder_layers: 0
+    d_ffn: 3072
+    dropout: 0.0
+    activation: !name:torch.nn.GELU
+    normalize_before: False
+
+tokenizer: !new:sentencepiece.SentencePieceProcessor
+
+# Modules
+modules:
+    wav2vec2: !ref <wav2vec2>
+    downsampler: !ref <downsampler>
+    CNN: !ref <CNN>
+    Transformer: !ref <Transformer>
+    emb: !ref <emb>
+    dec: !ref <dec>
+    seq_lin: !ref <seq_lin>
+    ctc_lin: !ref <ctc_lin>
+    lm_model: !ref <lm_model>
+
+model: !new:torch.nn.ModuleList
+    - [!ref <wav2vec2>, !ref <downsampler>, !ref <CNN>, !ref <Transformer>, !ref <emb>, !ref <dec>, !ref <seq_lin>, !ref <ctc_lin>]
+
+# Optimizers
+Adam: !name:torch.optim.Adam
+    lr: !ref <lr>
+    betas: (0.9, 0.98)
+    eps: 0.000000001
+
+wav2vec_opt_class: !name:torch.optim.Adam
+    lr: !ref <lr_wav2vec>
+
+############################## Decoding & optimiser ############################
+
+ctc_scorer: !new:speechbrain.decoders.scorer.CTCScorer
+    eos_index: !ref <eos_index>
+    blank_index: !ref <blank_index>
+    ctc_fc: !ref <ctc_lin>
+
+transformerlm_scorer: !new:speechbrain.decoders.scorer.TransformerLMScorer
+    language_model: !ref <lm_model>
+    temperature: 1.15
+
+scorer_test_search: !new:speechbrain.decoders.scorer.ScorerBuilder
+    full_scorers: [!ref <transformerlm_scorer>, !ref <ctc_scorer>]
+    weights:
+        ctc: !ref <ctc_weight_decode>
+        transformerlm: !ref <lm_weight>
+
+scorer_valid_search: !new:speechbrain.decoders.scorer.ScorerBuilder
+    full_scorers: [!ref <ctc_scorer>]
+    weights:
+        ctc: !ref <ctc_weight_decode>
+
+valid_search: !new:speechbrain.decoders.S2STransformerBeamSearcher
+    modules: [!ref <Transformer>, !ref <seq_lin>]
+    bos_index: !ref <bos_index>
+    eos_index: !ref <eos_index>
+    min_decode_ratio: !ref <min_decode_ratio>
+    max_decode_ratio: !ref <max_decode_ratio>
+    beam_size: !ref <valid_beam_size>
+    using_eos_threshold: False
+    length_normalization: True
+    scorer: !ref <scorer_valid_search>
+
+test_search: !new:speechbrain.decoders.S2STransformerBeamSearcher
+    modules: [!ref <Transformer>, !ref <seq_lin>]
+    bos_index: !ref <bos_index>
+    eos_index: !ref <eos_index>
+    min_decode_ratio: !ref <min_decode_ratio>
+    max_decode_ratio: !ref <max_decode_ratio>
+    beam_size: !ref <test_beam_size>
+    temperature: 1.15
+    using_eos_threshold: False
+    length_normalization: True
+    scorer: !ref <scorer_test_search>
+
+log_softmax: !new:torch.nn.LogSoftmax
+    dim: -1
+
+ctc_cost: !name:speechbrain.nnet.losses.ctc_loss
+    blank_index: !ref <blank_index>
+    reduction: !ref <loss_reduction>
+
+seq_cost: !name:speechbrain.nnet.losses.nll_loss
+    label_smoothing: !ref <label_smoothing>
+    reduction: !ref <loss_reduction>
+
+noam_annealing: !new:speechbrain.nnet.schedulers.NoamScheduler
+    lr_initial: !ref <lr>
+    n_warmup_steps: 25000
+
+checkpointer: !new:speechbrain.utils.checkpoints.Checkpointer
+    checkpoints_dir: !ref <save_folder>
+    recoverables:
+        model: !ref <model>
+        noam_scheduler: !ref <noam_annealing>
+        counter: !ref <epoch_counter>
+
+epoch_counter: !new:speechbrain.utils.epoch_loop.EpochCounter
+    limit: !ref <number_of_epochs>
+
+############################## Augmentations ###################################
+
+# Speed perturbation
+speed_perturb: !new:speechbrain.augment.time_domain.SpeedPerturb
+    orig_freq: !ref <sample_rate>
+    speeds: [95, 100, 105]
+
+# Time drop
+time_drop: !new:speechbrain.augment.freq_domain.SpectrogramDrop
+    drop_length_low: 15
+    drop_length_high: 25
+    drop_count_low: 4
+    drop_count_high: 4
+    replace: "mean"
+
+# Freq drop
+freq_drop: !new:speechbrain.augment.freq_domain.SpectrogramDrop
+    drop_length_low: 10
+    drop_length_high: 20
+    drop_count_low: 4
+    drop_count_high: 4
+    replace: "mean"
+    dim: 2
+
+# Time warp
+time_warp: !new:speechbrain.augment.freq_domain.Warping
+
+fea_augment: !new:speechbrain.augment.augmenter.Augmenter
+    min_augmentations: 2
+    max_augmentations: 2
+    augment_prob: 1.0
+    augmentations:
+        - !ref <time_drop>
+        - !ref <freq_drop>
+
+############################## Logging and Pretrainer ##########################
+
+train_logger: !new:speechbrain.utils.train_logger.FileTrainLogger
+    save_file: !ref <train_log>
+
+error_rate_computer: !name:speechbrain.utils.metric_stats.ErrorRateStats
+acc_computer: !name:speechbrain.utils.Accuracy.AccuracyStats
+
+pretrainer: !new:speechbrain.utils.parameter_transfer.Pretrainer
+    collect_in: null
+    loadables:
+        lm: !ref <lm_model>
+        tokenizer: !ref <tokenizer>
+    paths:
+        lm: !ref <pretrained_lm_tokenizer_path>/lm.ckpt
+        tokenizer: !ref <pretrained_lm_tokenizer_path>/tokenizer.ckpt
