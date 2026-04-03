@@ -18,7 +18,6 @@
 | test-clean | 基线测试 |
 | test-other | 鲁棒性测试 |
 | DEMAND | 合成噪声 |
-| CHiME-4 | 最终评测 |
 
 ## 框架
 SpeechBrain
@@ -67,7 +66,6 @@ python recipes/LibriSpeech/ASR/robust_asr/train.py \
 ### 评测指标
 - WER (Word Error Rate) on test-clean
 - WER on test-other
-- WER on CHiME-4
 
 ## 文件结构
 ```
