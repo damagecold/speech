@@ -13,7 +13,7 @@
 # Seed needs to be set at top of yaml, before objects with parameters are made
 seed: 2602
 __set_seed: !apply:speechbrain.utils.seed_everything [!ref <seed>]
-output_folder: !ref results/wavlm_base_conformer_robust/<seed>
+output_folder: !ref results/wavlm_base_conformer_feature/<seed>
 output_wer_folder: !ref <output_folder>/
 save_folder: !ref <output_folder>/save
 train_log: !ref <output_folder>/train_log.txt
@@ -54,7 +54,7 @@ num_workers: 4
 precision: fp32  # bf16, fp16 or fp32
 
 # 课程对抗训练参数
-curriculum_adversarial: True
+curriculum_adversarial: False
 curriculum_epochs: [10, 20]  # 阶段切换的 epoch
 curriculum_snrs: [20, 10, 0]  # dB, 高→中→低 SNR
 adversarial_weight: 0.1  # 对抗 loss 权重
