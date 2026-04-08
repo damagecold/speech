@@ -148,12 +148,12 @@ wav2vec2: !new:speechbrain.integrations.huggingface.wavlm.WavLM
 # Conformer Encoder (CNN does 4x downsampling + dim reduction: 768→256)
 CNN: !new:speechbrain.lobes.models.convolution.ConvolutionFrontEnd
     input_shape: [null, null, 768]
-    num_blocks: 2
+    num_blocks: 1
     num_layers_per_block: 1
-    out_channels: (128, 256)
-    kernel_sizes: (3, 3)
-    strides: (2, 2)  # 4x downsampling
-    residuals: (False, False)
+    out_channels: (256,)
+    kernel_sizes: (5,)
+    strides: (4,)
+    residuals: (False,)
 
 Transformer: !new:speechbrain.lobes.models.transformer.TransformerASR.TransformerASR
     input_size: 256  # CNN output
