@@ -145,14 +145,10 @@ wav2vec2: !new:speechbrain.integrations.huggingface.wavlm.WavLM
     freeze: !ref <freeze_wav2vec>
     save_path: !ref <wavlm_folder>
 
-# Conformer Encoder (simple Conv1d for downsampling + dim reduction)
-CNN: !new:speechbrain.nnet.CNN.Conv1d
-    in_channels: 768
-    out_channels: 256
-    kernel_size: 5
-    stride: 4
-    padding: 0
-    bias: False
+# Conformer Encoder (simple linear for dim reduction 768→256)
+CNN: !new:speechbrain.nnet.linear.Linear
+    input_size: 768
+    n_neurons: 256
 
 Transformer: !new:speechbrain.lobes.models.transformer.TransformerASR.TransformerASR
     input_size: 256  # CNN output (last layer out_channels=256)
