@@ -119,7 +119,9 @@ activation: !name:torch.nn.GELU
 
 # Downsampling
 downsampling_factor: 4  # WavLM 25ms hop → 100ms (4x downsample)
-downsampling_kernel_size: 81
+
+# Pooling-based downsampler (for 3D feature tensors from WavLM)
+pooling_kernel_size: 4
 
 # Token parameters
 output_neurons: 5000  # BPE tokenizer size
@@ -148,10 +150,12 @@ wav2vec2: !new:speechbrain.integrations.huggingface.wavlm.WavLM
     freeze: !ref <freeze_wav2vec>
     save_path: !ref <wavlm_folder>
 
-# Downsampling
-downsampler: !new:speechbrain.lobes.downsampling.Conv1DDownsampler
+# Feature downsampling (4x) after WavLM
+downsampler: !new:speechbrain.lobes.downsampling.PoolingDownsampler
     downsampling_factor: !ref <downsampling_factor>
-    kernel_size: !ref <downsampling_kernel_size>
+    kernel_size: !ref <pooling_kernel_size>
+    padding: 0
+    pool_type: "avg"
 
 # Conformer Encoder
 CNN: !new:speechbrain.lobes.models.convolution.ConvolutionFrontEnd
@@ -160,11 +164,11 @@ CNN: !new:speechbrain.lobes.models.convolution.ConvolutionFrontEnd
     num_layers_per_block: 1
     out_channels: (128, 256)
     kernel_sizes: (3, 3)
-    strides: (2, 2)
+    strides: (1, 1)  # No downsampling, PoolingDownsampler already did 4x
     residuals: (False, False)
 
 Transformer: !new:speechbrain.lobes.models.transformer.TransformerASR.TransformerASR
-    input_size: 512  # CNN output
+    input_size: 256  # CNN output
     tgt_vocab: !ref <output_neurons>
     d_model: !ref <d_model>
     nhead: !ref <nhead>
