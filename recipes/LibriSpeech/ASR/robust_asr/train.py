@@ -50,12 +50,11 @@ class ASR(sb.Brain):
         wav2vec2_out = self.modules.wav2vec2(wavs)
         # wav2vec2_out: (batch, time, features)
 
-        # Downsampling
-        if hasattr(self.hparams, "downsampler"):
-            wav2vec2_out = self.modules.downsampler(wav2vec2_out)
+        # Feature downsampling (4x) after WavLM
+        wav2vec2_out = self.modules.downsampler(wav2vec2_out)
 
-        # Conformer Encoder
-        x = self.modules.Transformer(wav2vec2_out)
+        # Conformer Encoder (CNN provides additional processing)
+        x = self.modules.CNN(wav2vec2_out)
         e_in = self.modules.emb(tokens_bos)  # y_in bos + tokens
         h, _ = self.modules.dec(e_in, x, wav_lens)
 
@@ -426,7 +425,7 @@ if __name__ == "__main__":
     # Trainer initialization
     asr_brain = ASR(
         modules=hparams["modules"],
-        opt_class=hparams["opt_class"],
+        opt_class=hparams["Adam"],
         hparams=hparams,
         run_opts=run_opts,
         checkpointer=hparams["checkpointer"],
