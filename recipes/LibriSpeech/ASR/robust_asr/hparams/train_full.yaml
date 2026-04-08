@@ -117,12 +117,7 @@ d_ffn: 1024
 transformer_dropout: 0.1
 activation: !name:torch.nn.GELU
 
-# Downsampling
-downsampling_factor: 4  # WavLM 25ms hop → 100ms (4x downsample)
-
-# Pooling-based downsampler (for 3D feature tensors from WavLM)
-pooling_kernel_size: 4
-
+# Downsampling (CNN will do 4x downsample with strides (2,2))
 # Token parameters
 output_neurons: 5000  # BPE tokenizer size
 blank_index: 0
@@ -150,21 +145,14 @@ wav2vec2: !new:speechbrain.integrations.huggingface.wavlm.WavLM
     freeze: !ref <freeze_wav2vec>
     save_path: !ref <wavlm_folder>
 
-# Feature downsampling (4x) after WavLM
-downsampler: !new:speechbrain.lobes.downsampling.PoolingDownsampler
-    downsampling_factor: !ref <downsampling_factor>
-    kernel_size: !ref <pooling_kernel_size>
-    padding: 0
-    pool_type: "avg"
-
-# Conformer Encoder
+# Conformer Encoder (CNN does 4x downsampling + dim reduction: 768→256)
 CNN: !new:speechbrain.lobes.models.convolution.ConvolutionFrontEnd
     input_shape: [null, null, 768]
     num_blocks: 2
     num_layers_per_block: 1
     out_channels: (128, 256)
     kernel_sizes: (3, 3)
-    strides: (1, 1)  # No downsampling, PoolingDownsampler already did 4x
+    strides: (2, 2)  # 4x downsampling
     residuals: (False, False)
 
 Transformer: !new:speechbrain.lobes.models.transformer.TransformerASR.TransformerASR
@@ -228,7 +216,6 @@ tokenizer: !new:sentencepiece.SentencePieceProcessor
 # Modules
 modules:
     wav2vec2: !ref <wav2vec2>
-    downsampler: !ref <downsampler>
     CNN: !ref <CNN>
     Transformer: !ref <Transformer>
     emb: !ref <emb>
@@ -238,7 +225,7 @@ modules:
     lm_model: !ref <lm_model>
 
 model: !new:torch.nn.ModuleList
-    - [!ref <wav2vec2>, !ref <downsampler>, !ref <CNN>, !ref <Transformer>, !ref <emb>, !ref <dec>, !ref <seq_lin>, !ref <ctc_lin>]
+    - [!ref <wav2vec2>, !ref <CNN>, !ref <Transformer>, !ref <emb>, !ref <dec>, !ref <seq_lin>, !ref <ctc_lin>]
 
 # Optimizers
 Adam: !name:torch.optim.Adam
