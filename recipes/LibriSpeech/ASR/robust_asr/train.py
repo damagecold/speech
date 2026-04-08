@@ -50,8 +50,9 @@ class ASR(sb.Brain):
         wav2vec2_out = self.modules.wav2vec2(wavs)
         # wav2vec2_out: (batch, time, features)
 
-        # Conformer Encoder (CNN does 4x downsampling + dim reduction: 768→256)
-        x = self.modules.CNN(wav2vec2_out)
+        # Conformer Encoder: CNN for dim reduction + Transformer for encoding
+        x = self.modules.CNN(wav2vec2_out)  # [B, T, 256]
+        x = self.modules.Transformer(x, None)  # encoder only mode, returns [B, T, d_model]
         e_in = self.modules.emb(tokens_bos)  # y_in bos + tokens
         h, _ = self.modules.dec(e_in, x, wav_lens)
 
